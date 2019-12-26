@@ -1,10 +1,28 @@
 extern crate der_parser;
 extern crate failure;
 extern crate rsa;
-use der_parser::{ber::BerObjectContent, parse_der};
-use rsa::{hash::Hashes, BigUint, PaddingScheme, PublicKey, RSAPublicKey};
-/// It verifies signature. Hash function is SHA256. Padding scheme is PKCS 1.
+use der_parser::{ber::BerObjectContent, error::BerError, parse_der};
+use rsa::{
+    errors::Error as RSAError, hash::Hashes, BigUint, PaddingScheme, PublicKey, RSAPublicKey,
+};
 
+#[derive(Debug)]
+pub enum Error {
+    ParseError,
+    NumberError,
+}
+impl From<BerError> for Error {
+    fn from(_: BerError) -> Error {
+        Error::ParseError
+    }
+}
+impl From<RSAError> for Error {
+    fn from(_: RSAError) -> Error {
+        Error::NumberError
+    }
+}
+
+/// It verifies signature. Hash function is SHA256. Padding scheme is PKCS 1.
 pub fn verify(
     pubkey: RSAPublicKey,
     hash: &[u8],
@@ -18,18 +36,22 @@ pub fn verify(
     )
 }
 
-pub fn convert_pubkey_der(pubkey_der: &[u8]) -> Result<RSAPublicKey, ()> {
-    let parsed = parse_der(pubkey_der)?.1;
+/// It converts der formatted public key slice to RSAPublicKey object.
+pub fn convert_pubkey_der(pubkey_der: &[u8]) -> Result<RSAPublicKey, Error> {
+    let parsed = match parse_der(pubkey_der) {
+        Ok(s) => s.1,
+        Err(_) => return Err(Error::ParseError),
+    };
     let pubkey = parsed.as_sequence()?;
     let n = match pubkey[0].content {
         BerObjectContent::Integer(s) => BigUint::from_bytes_be(s),
-        _ => return Err(()),
+        _ => return Err(Error::NumberError),
     };
     let e = match pubkey[1].content {
         BerObjectContent::Integer(s) => BigUint::from_bytes_be(s),
-        _ => return Err(()),
+        _ => return Err(Error::NumberError),
     };
-    RSAPublicKey::new(n, e)
+    Ok(RSAPublicKey::new(n, e)?)
 }
 
 #[cfg(test)]
