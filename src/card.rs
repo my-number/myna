@@ -1,4 +1,7 @@
-pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), maxsize: u8, data: &[u8]) -> &[u8] {
+pub mod apdu;
+
+/// returns constructed apdu vector.
+pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), maxsize: u8, data: &[u8]) -> Vec<u8> {
     let mut packet_size = 5;
     let data_size = data.len();
     if data_size <= 0xff {
@@ -8,19 +11,34 @@ pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), maxsize: u8, data: &[u8]) ->
     } else {
         panic!("Data size is too large");
     }
-    let mut buf: &[u8] = &[0; packet_size];
-    buf[0] = cla;
-    buf[1] = ins;
-    buf[2] = param.0;
-    buf[3] = param.1;
+    let mut buf: Vec<u8> = Vec::with_capacity(packet_size);
+    buf.push(cla);
+    buf.push(ins);
+    buf.push(param.0);
+    buf.push(param.1);
 
     if data_size <= 0xff {
-        //apdu.push(data_size);
-    } else if data_size <= 0xff {
-        // apdu.push(0);
-        //apdu.push(data_size & 0xff);
-        //apdu.push(data_size | 0xff);
+        buf.push(data_size as u8);
+    } else if data_size <= 0xffff {
+        buf.push(0);
+        buf.push(data_size as u8 >> 4);
+        buf.push(data_size as u8 & 0xff);
     }
+    buf.extend_from_slice(data);
+    buf.push(maxsize);
+    buf
 }
 
-pub fn select_ef() -> [u8] {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate hex_literal;
+    use hex_literal::hex;
+    #[test]
+    fn it_makes_apdu() {
+        assert_eq!(
+            make_apdu(0x00, 0x0a, (0x0b, 0x00), 0x00, &[1, 2, 3, 4, 5]),
+            hex!("000a0b0005010203040500")
+        );
+    }
+}
