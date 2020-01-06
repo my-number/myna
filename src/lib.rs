@@ -1,6 +1,6 @@
 pub mod card;
 pub mod crypto;
-mod test_vector;
+pub mod test_vector;
 #[cfg(test)]
 mod tests {
     #[test]
