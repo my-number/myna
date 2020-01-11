@@ -40,7 +40,7 @@ pub fn verify(pin: &str) -> Vec<u8> {
 }
 
 pub fn compute_sig(hash_pkcs1: &[u8]) -> Vec<u8> {
-    make_apdu(0x80, 0x2a, (0x00, 0x80), hash_pkcs1, 0)
+    make_apdu(0x00, 0x2a, (0x00, 0x80), hash_pkcs1, 0xff)
 }
 
 #[cfg(test)]
