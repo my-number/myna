@@ -2,7 +2,7 @@ pub mod apdu;
 pub mod binary_reader;
 
 /// returns constructed apdu vector.
-pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), data: &[u8], maxsize: u8) -> Vec<u8> {
+pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), data: &[u8], maxsize: Option<u8>) -> Vec<u8> {
     let mut packet_size = 5;
     let data_size = data.len();
     if data_size == 0 {
@@ -29,8 +29,8 @@ pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), data: &[u8], maxsize: u8) ->
         buf.push(data_size as u8 & 0xff);
     }
     buf.extend_from_slice(data);
-    if maxsize > 0 {
-        buf.push(maxsize);
+    if let Some(max) = maxsize {
+        buf.push(max);
     }
     buf
 }

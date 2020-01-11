@@ -33,7 +33,13 @@ impl BinaryReader {
         } else {
             self.length - len
         };
-        Some(make_apdu(0x00, 0xb0, (p1 as u8, p2 as u8), &[], le as u8))
+        Some(make_apdu(
+            0x00,
+            0xb0,
+            (p1 as u8, p2 as u8),
+            &[],
+            Some(le as u8),
+        ))
     }
     pub fn set_chunk(&mut self, chunk: &[u8]) -> i32 {
         self.data.extend_from_slice(&chunk[..]);
