@@ -1,6 +1,6 @@
 pub mod apdu;
 pub mod binary_reader;
-
+pub mod responder;
 /// returns constructed apdu vector.
 pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), data: &[u8], maxsize: Option<u8>) -> Vec<u8> {
     let mut packet_size = 5;
