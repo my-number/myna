@@ -52,15 +52,16 @@ impl Responder {
     pub fn new(transfunc: TransFunc) -> Self {
         Self { transfunc }
     }
+    pub fn transmit(&self, data: &[u8]) -> ApduRes {}
     pub fn select_df(&self, dfid: &[u8]) -> Result<()> {
-        match self.transfunc(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
+        match self.transmit(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
             Ok(_) => Ok(()),
             _ => Err("Failed to SELECT DF"),
         }
     }
 
     pub fn select_ef(&self, efid: &[u8]) -> Result<()> {
-        match self.transfunc(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
+        match (self.transfunc)(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
             Ok(_) => Ok(()),
             _ => Err("Failed to SELECT EF"),
         }
@@ -83,19 +84,19 @@ impl Responder {
         self.select_ef(b"\x00\x17")
     }
     pub fn get_challenge(&self, size: u8) -> Result<&[u8]> {
-        match self.transfunc(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
+        match (self.transfunc)(&make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
             Ok(data) => Ok(data),
             _ => Err("GET CHALLENGE failed"),
         }
     }
     pub fn verify_pin(&self, pin: &str) -> Result<()> {
-        match self.transfunc(make_apdu(0x00, 0x20, (0x00, 0x80), &pin.as_bytes(), None)) {
+        match (self.transfunc)(&make_apdu(0x00, 0x20, (0x00, 0x80), &pin.as_bytes(), None)) {
             Ok(_) => Ok(()),
             _ => Err("VERIFY PIN failed"),
         }
     }
     pub fn compute_sig(&self, hash_pkcs1: &[u8]) -> Result<&[u8]> {
-        match self.transfunc(make_apdu(0x80, 0x2a, (0x00, 0x80), hash_pkcs1, Some(0))) {
+        match (self.transfunc)(&make_apdu(0x80, 0x2a, (0x00, 0x80), hash_pkcs1, Some(0))) {
             // zero, the value of Le probably means 256. it overflowed.
             Ok(sig) => Ok(sig),
             _ => Err("COMPUTE DIGITAL SIGNATURE failed"),
