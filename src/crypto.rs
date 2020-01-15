@@ -27,6 +27,10 @@ pub fn encode_for_signature<H: rsa::hash::Hash>(
     hashType: Option<&H>,
 ) -> Result<Vec<u8>, RSAError> {
     Ok(vec![0; 0])
+
+    // ASN.1のTagとかLengthの固定値をくっつけるだけ。
+    // マイナンバーカードにかませられるだけのデータを。
+    // てか、噛ませられるデータって実は任意なのでは？
 }
 
 /// It verifies signature. Hash function is SHA256. Padding scheme is PKCS 1.
@@ -59,6 +63,17 @@ pub fn convert_pubkey_der(pubkey_der: &[u8]) -> Result<RSAPublicKey, Error> {
         _ => return Err(Error::NumberError),
     };
     Ok(RSAPublicKey::new(n, e)?)
+}
+pub fn extract_pubkey(cert_der: &[u8]) -> Result<RSAPublicKey, Error> {
+    let parsed = parse_der(cert_der)?.1;
+    let pubkey_der = parsed.as_sequence()?[6].as_sequence()?[1]
+        .as_bitstring()?
+        .data;
+    convert_pubkey_der(pubkey_der)
+}
+
+pub fn verify_cert(cert_der: &[u8], cacert_der: &[u8]) -> Result<(), Error> {
+    let capub = extract_pubkey(cacert_der)?;
 }
 
 #[cfg(test)]
