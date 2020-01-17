@@ -12,3 +12,4 @@ der-parser = "3.0.3"
 hex-literal = "0.2.1"
 failure = "0.1.6"
 x509-parser = { git = "https://github.com/rusticata/x509-parser.git" }
+sha2 = "0.8.1"

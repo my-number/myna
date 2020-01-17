@@ -43,7 +43,14 @@ mod tests {
     #[test]
     fn it_makes_apdu() {
         assert_eq!(
-            make_apdu(0x00, 0x0a, (0x0b, 0x00), 0x00, &[1, 2, 3, 4, 5]),
+            make_apdu(0x00, 0x0a, (0x0b, 0x00), &[1, 2, 3, 4, 5], Some(0)),
+            hex!("000a0b0005010203040500")
+        );
+    }
+    #[test]
+    fn it_makes_apdu_without_le() {
+        assert_eq!(
+            make_apdu(0x00, 0x0a, (0x0b, 0x00), &[1, 2, 3, 4, 5], None),
             hex!("000a0b0005010203040500")
         );
     }

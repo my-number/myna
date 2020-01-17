@@ -1,18 +1,30 @@
 extern crate der_parser;
 extern crate failure;
 extern crate rsa;
-use der_parser::{ber::BerObjectContent, error::BerError, parse_der};
+extern crate sha2;
+use der_parser::{ber::BerObjectContent, error::BerError, oid::Oid, parse_der};
 use rsa::{
     errors::Error as RSAError, hash::Hashes, BigUint, PaddingScheme, PublicKey, RSAPublicKey,
 };
-
+use sha2::{
+    digest::{FixedOutput, Input},
+    Sha256,
+};
+use x509_parser::{error::X509Error, parse_x509_der};
 #[derive(Debug)]
 pub enum Error {
     ParseError,
     NumberError,
+    NoCAError,
+    VerificationError,
 }
 impl From<BerError> for Error {
     fn from(_: BerError) -> Error {
+        Error::ParseError
+    }
+}
+impl From<X509Error> for Error {
+    fn from(_: X509Error) -> Error {
         Error::ParseError
     }
 }
@@ -64,16 +76,46 @@ pub fn convert_pubkey_der(pubkey_der: &[u8]) -> Result<RSAPublicKey, Error> {
     };
     Ok(RSAPublicKey::new(n, e)?)
 }
+fn parse_cert(cert_der: &[u8]) -> Result<x509_parser::X509Certificate, Error> {
+    let parsed = match parse_x509_der(cert_der) {
+        Ok(p) => p.1,
+        Err(_) => return Err(Error::ParseError),
+    };
+    Ok(parsed)
+}
 pub fn extract_pubkey(cert_der: &[u8]) -> Result<RSAPublicKey, Error> {
-    let parsed = parse_der(cert_der)?.1;
-    let pubkey_der = parsed.as_sequence()?[6].as_sequence()?[1]
-        .as_bitstring()?
+    let pubkey_der = parse_cert(cert_der)?
+        .tbs_certificate
+        .subject_pki
+        .subject_public_key
         .data;
     convert_pubkey_der(pubkey_der)
 }
 
 pub fn verify_cert(cert_der: &[u8], cacert_der: &[u8]) -> Result<(), Error> {
+    let cacert = parse_cert(cacert_der)?;
+    if !cacert.tbs_certificate.is_ca() {
+        return Err(Error::NoCAError);
+    }
     let capub = extract_pubkey(cacert_der)?;
+    let cert = parse_cert(cert_der)?;
+    let to_hash = &cert.tbs_certificate;
+    if cert.signature_algorithm.algorithm == Oid::from(&[1, 2, 840, 113549, 1, 1, 11]) {
+        // sha256WithRSAEncryption
+        let mut hasher = Sha256::default();
+        hasher.input(to_hash);
+        let hashed = &hasher.fixed_result();
+
+        match verify(capub, hashed, cert.signature_value.data) {
+            Ok(()) => return Ok(()),
+            Err(_) => return Err(Error::VerificationError),
+        };
+    // verify code to be written after meeting
+    } else {
+        unimplemented!()
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -103,5 +145,17 @@ mod tests {
     #[test]
     fn it_fails_invalid_pubkey_der() {
         assert!(convert_pubkey_der(&[0; 34]).is_err())
+    }
+    #[test]
+    fn it_verifies_certificate() {
+        assert!(verify_cert(test_vector::CERT_DER, test_vector::CA_JPKI_AUTH_01).is_ok())
+    }
+    #[test]
+    fn it_verifies_selfsigned_certificate() {
+        assert!(verify_cert(test_vector::CA_JPKI_AUTH_01, test_vector::CA_JPKI_AUTH_01).is_ok())
+    }
+    #[test]
+    fn it_rejects_non_ca() {
+        assert!(verify_cert(test_vector::CERT_DER, test_vector::CERT_DER).is_err())
     }
 }
