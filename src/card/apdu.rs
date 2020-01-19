@@ -112,18 +112,18 @@ where
             _ => Err("COMPUTE DIGITAL SIGNATURE failed"),
         }
     }
-    pub fn read_binary(&self) -> Result<&[u8]> {
-        let data = Vec::<u8>::new();
+    pub fn read_binary(&self) -> Result<Vec<u8>> {
+        let mut data = Vec::<u8>::new();
         loop {
             let current_size = data.len();
-            let p1 = current_size & 0xff as u8;
-            let p2 = (current_size >> 8) & 0xff as u8;
+            let p1 = ((current_size >> 8) & 0xff) as u8;
+            let p2 = (current_size & 0xff) as u8;
             let read_size: u8 = 0xffu8;
             match self.transmit(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
-                Ok(s) => {
+                ApduRes::Ok(s) => {
                     data.extend_from_slice(&s[..]);
-                    if s.len() < read_size {
-                        return Ok(&data[..]);
+                    if s.len() < read_size as usize {
+                        return Ok(data);
                     }
                 }
                 _ => return Err("READ BINARY failed"),
