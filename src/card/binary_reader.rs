@@ -1,3 +1,5 @@
+pub extern crate alloc;
+use alloc::vec::Vec;
 use super::make_apdu;
 use der_parser::der::der_read_element_header;
 

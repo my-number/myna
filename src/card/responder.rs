@@ -1,3 +1,5 @@
+pub extern crate alloc;
+use alloc::vec::Vec;
 use super::make_apdu;
 
 type ApduBody = Vec<u8>;
@@ -51,7 +53,7 @@ where
     transfunc: T,
 }
 
-type Result<T> = std::result::Result<T, &'static str>;
+type Result<T> = core::result::Result<T, &'static str>;
 
 impl<T> Responder<T>
 where
