@@ -1,6 +1,7 @@
 use super::make_apdu;
 extern crate alloc;
 use alloc::vec::Vec;
+use der_parser::der::der_read_element_header;
 
 type ApduBody = Vec<u8>;
 
@@ -115,16 +116,29 @@ where
         }
     }
     pub fn read_binary(&self) -> Result<Vec<u8>> {
-        let mut data = Vec::<u8>::new();
+        let header = match self.transmit(make_apdu(0x00, 0xb0, (0u8, 0u8), &[], Some(7u8))) {
+            ApduRes::Ok(s) => s,
+            _ => return Err("READ BINARY failed"),
+        };
+
+        let parsed = der_read_element_header(&header[..]).unwrap();
+        let length = parsed.1.len as usize + header.len() - parsed.0.len();
+
+        let mut data = Vec::<u8>::with_capacity(length);
         loop {
             let current_size = data.len();
             let p1 = ((current_size >> 8) & 0xff) as u8;
             let p2 = (current_size & 0xff) as u8;
-            let read_size: u8 = 0xffu8;
+            let remaining_size = length - current_size;
+            let read_size = if remaining_size < 0xff {
+                remaining_size as u8
+            } else {
+                0xffu8
+            };
             match self.transmit(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
                 ApduRes::Ok(s) => {
                     data.extend_from_slice(&s[..]);
-                    if s.len() < read_size as usize {
+                    if remaining_size < 0xff {
                         return Ok(data);
                     }
                 }
