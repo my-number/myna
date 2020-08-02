@@ -1,4 +1,5 @@
 pub mod apdu;
+pub mod apdu_trait;
 pub mod binary_reader;
 pub mod responder;
 /// returns constructed apdu vector.

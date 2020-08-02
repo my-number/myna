@@ -1,133 +1,69 @@
 use super::make_apdu;
+use std::future::Future;
 
-type ApduBody = Vec<u8>;
-
-#[derive(Debug)]
-pub enum ApduRes {
-    /// SW is 9000 or 9100
-    Ok(ApduBody),
-    /// SW is 6a86
-    ParamIncorrect,
-    /// SW is 67XX
-    WrongLength,
-    /// Errors not defined here
-    OtherError(u8, u8),
+pub enum ApduError<E> {
+    CommandError(u8,u8),
+    TransmissionError(E),
+    ExecutionError(&'static str)
 }
-impl ApduRes {
-    pub fn new(sw1: u8, sw2: u8, data: ApduBody) -> Self {
-        if (sw1 == 0x90 || sw1 == 0x91) && sw2 == 0x00 {
-            return Self::Ok(data);
-        }
-        if sw1 == 0x6a && sw2 == 0x86 {
-            return Self::ParamIncorrect;
-        }
-        if sw1 == 0x67 {
-            return Self::WrongLength;
-        }
-        ApduRes::OtherError(sw1, sw2)
-    }
-    pub fn from_apdu(apdu: &[u8]) -> Self {
-        Self::new(
-            apdu[apdu.len() - 2],
-            apdu[apdu.len() - 1],
-            apdu[0..apdu.len() - 2].to_vec(),
-        )
-    }
-    pub fn unwrap(self) -> ApduBody {
-        match self {
-            Self::Ok(t) => t,
-            _ => panic!("Unwrap failed"),
-        }
-    }
-}
+pub type ApduBody = Vec<u8>;
 
-type TransFunc = dyn Fn(&[u8]) -> ApduRes;
-
-pub struct Apdu<T>
+pub struct Apdu<F, E>
 where
-    T: Fn(&[u8]) -> ApduRes,
+    F: Fn(&[u8]) -> Result<ApduBody, E>,
 {
     /// Function that transmit APDU request & make response into ApduRes
-    transfunc: T,
+    transfunc: F,
 }
 
-type Result<T> = std::result::Result<T, &'static str>;
-
-impl<T> Apdu<T>
+impl<F, E> Apdu<F, E>
 where
-    T: Fn(&[u8]) -> ApduRes,
+    F: Fn(&[u8]) -> Result<ApduBody, E>,
 {
-    pub fn new(transfunc: T) -> Self {
+    pub fn new(transfunc: F) -> Self {
         Self { transfunc }
     }
-    pub(crate) fn transmit(&self, data: ApduBody) -> ApduRes {
-        (self.transfunc)(&data[..])
+    pub(crate) fn transmit(&self, data: ApduBody) -> Result<ApduBody, ApduError<E>> {
+        match (self.transfunc)(&data[..]) {
+            Ok(apdu) => {
+                let len = apdu.len();
+                let sw1 = apdu[len - 2];
+                let sw2 = apdu[len - 1];
+                if (sw1 == 0x90 || sw1 == 0x91) && sw2 == 0x00 {
+                    return Ok(apdu[0..len - 2].to_vec());
+                }
+                return Err(ApduError::CommandError(sw1,sw2));
+            }
+            Err(e) => Err(ApduError::TransmissionError(e)),
+        }
     }
-    pub fn select_df(&self, dfid: &[u8]) -> Result<()> {
+    pub fn select_df(&self, dfid: &[u8]) -> Result<(), ApduError<E>> {
         match self.transmit(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
-            ApduRes::Ok(_) => Ok(()),
-            _ => Err("Failed to SELECT DF"),
+            Ok(_) => Ok(()),
+            _ => Err(ApduError::ExecutionError("Failed to SELECT DF")),
         }
     }
-
-    pub fn select_ef(&self, efid: &[u8]) -> Result<()> {
+    pub fn select_ef(&self, efid: &[u8]) -> Result<(), ApduError<E>> {
         match self.transmit(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
-            ApduRes::Ok(_) => Ok(()),
-            _ => Err("Failed to SELECT EF"),
+            Ok(_) => Ok(()),
+            _ => Err(ApduError::ExecutionError("Failed to SELECT EF")),
         }
     }
 
-    pub fn select_jpki_ap(&self) -> Result<()> {
+    pub fn select_jpki_ap(&self) -> Result<(), ApduError<E>> {
         self.select_df(b"\xD3\x92\xf0\x00\x26\x01\x00\x00\x00\x01")
     }
-    pub fn select_jpki_token(&self) -> Result<()> {
+    pub fn select_jpki_token(&self) -> Result<(), ApduError<E>> {
         self.select_ef(b"\x00\x06")
     }
-    pub fn select_jpki_cert_auth(&self) -> Result<()> {
+    pub fn select_jpki_cert_auth(&self) -> Result<(), ApduError<E>> {
         self.select_ef(b"\x00\x0a")
     }
 
-    pub fn select_jpki_auth_pin(&self) -> Result<()> {
+    pub fn select_jpki_auth_pin(&self) -> Result<(), ApduError<E>> {
         self.select_ef(b"\x00\x18")
     }
-    pub fn select_jpki_auth_key(&self) -> Result<()> {
+    pub fn select_jpki_auth_key(&self) -> Result<(), ApduError<E>> {
         self.select_ef(b"\x00\x17")
-    }
-    pub fn get_challenge(&self, size: u8) -> Result<ApduBody> {
-        match self.transmit(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
-            ApduRes::Ok(data) => Ok(data),
-            _ => Err("GET CHALLENGE failed"),
-        }
-    }
-    pub fn verify_pin(&self, pin: &str) -> Result<()> {
-        match self.transmit(make_apdu(0x00, 0x20, (0x00, 0x80), &pin.as_bytes(), None)) {
-            ApduRes::Ok(_) => Ok(()),
-            _ => Err("VERIFY PIN failed"),
-        }
-    }
-    pub fn compute_sig(&self, hash_pkcs1: &[u8]) -> Result<ApduBody> {
-        match self.transmit(make_apdu(0x80, 0x2a, (0x00, 0x80), hash_pkcs1, Some(0))) {
-            // zero, the value of Le probably means 256. it overflowed.
-            ApduRes::Ok(sig) => Ok(sig),
-            _ => Err("COMPUTE DIGITAL SIGNATURE failed"),
-        }
-    }
-    pub fn read_binary(&self) -> Result<Vec<u8>> {
-        let mut data = Vec::<u8>::new();
-        loop {
-            let current_size = data.len();
-            let p1 = ((current_size >> 8) & 0xff) as u8;
-            let p2 = (current_size & 0xff) as u8;
-            let read_size: u8 = 0xffu8;
-            match self.transmit(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
-                ApduRes::Ok(s) => {
-                    data.extend_from_slice(&s[..]);
-                    if s.len() < read_size as usize {
-                        return Ok(data);
-                    }
-                }
-                _ => return Err("READ BINARY failed"),
-            }
-        }
     }
 }
