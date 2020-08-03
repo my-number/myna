@@ -5,6 +5,7 @@ pub enum Error<T> {
     Execution(&'static str),
 }
 
+use der_parser::der::der_read_element_header;
 type Request = Vec<u8>;
 type Response = Vec<u8>;
 type BinaryData = Vec<u8>;
@@ -13,10 +14,10 @@ type FileId<'a> = &'a [u8];
 
 pub trait Apdu {
     type TransErr;
-    fn raw_transmit(&self, data: Request) -> Result<Response, Self::TransErr>;
+    fn transmit(&self, data: Request) -> Result<Response, Self::TransErr>;
 
-    fn transmit(&self, data: Request) -> Result<Response, Error<Self::TransErr>> {
-        match self.raw_transmit(data) {
+    fn transmit_checked(&self, data: Request) -> Result<Response, Error<Self::TransErr>> {
+        match self.transmit(data) {
             Ok(apdu) => {
                 let len = apdu.len();
                 let sw1 = apdu[len - 2];
@@ -30,13 +31,13 @@ pub trait Apdu {
         }
     }
     fn select_df(&self, dfid: FileId) -> Result<(), Error<Self::TransErr>> {
-        match self.transmit(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
+        match self.transmit_checked(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
             Ok(_) => Ok(()),
             _ => Err(Error::Execution("Failed to SELECT DF")),
         }
     }
     fn select_ef(&self, efid: FileId) -> Result<(), Error<Self::TransErr>> {
-        match self.transmit(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
+        match self.transmit_checked(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
             Ok(_) => Ok(()),
             _ => Err(Error::Execution("Failed to SELECT EF")),
         }
@@ -58,20 +59,22 @@ pub trait Apdu {
         self.select_ef(b"\x00\x17")
     }
     fn get_challenge(&self, size: u8) -> Result<Response, Error<Self::TransErr>> {
-        match self.transmit(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
+        match self.transmit_checked(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
             Ok(s) => Ok(s),
             _ => Err(Error::Execution("GET CHALLENGE failed")),
         }
     }
-    fn verify_pin(&self, pin: [u8; 4]) -> Result<(), Error<Self::TransErr>> {
-        // do we need PIN ^[0-9]{4}$ validation here?
-        match self.transmit(make_apdu(0x00, 0x20, (0x00, 0x80), &pin[..], None)) {
+    fn verify_pin(&self, pin: &str) -> Result<(), Error<Self::TransErr>> {
+        if !check_pin(pin) {
+            return Err(Error::Execution("PIN is invalid"))
+        }
+        match self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), pin.as_bytes(), None)) {
             Ok(_) => Ok(()),
             _ => Err(Error::Execution("VERIFY PIN failed")),
         }
     }
     fn compute_sig(&self, hash_pkcs1: Hash) -> Result<Response, Error<Self::TransErr>> {
-        match self.transmit(make_apdu(
+        match self.transmit_checked(make_apdu(
             0x80,
             0x2a,
             (0x00, 0x80),
@@ -85,16 +88,29 @@ pub trait Apdu {
     }
 
     fn read_binary(&self) -> Result<BinaryData, Error<Self::TransErr>> {
-        let mut data: Vec<u8> = Vec::new();
+        let header = match self.transmit_checked(make_apdu(0x00, 0xb0, (0u8, 0u8), &[], Some(7u8))) {
+            Ok(s) => s,
+            _ => return Err(Error::Execution("READ BINARY failed")),
+        };
+
+        let parsed = der_read_element_header(&header[..]).unwrap();
+        let length = parsed.1.len as usize + header.len() - parsed.0.len();
+        
+        let mut data: Vec<u8> = Vec::with_capacity(length);
         loop {
             let current_size = data.len();
             let p1 = ((current_size >> 8) & 0xff) as u8;
             let p2 = (current_size & 0xff) as u8;
-            let read_size: u8 = 0xffu8;
-            match self.transmit(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
+            let remaining_size = length - current_size;
+            let read_size = if remaining_size < 0xff {
+                remaining_size as u8
+            } else {
+                0xffu8
+            };
+            match self.transmit_checked(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
                 Ok(s) => {
                     data.extend_from_slice(&s[..]);
-                    if s.len() < read_size as usize {
+                    if remaining_size < 0xff {
                         return Ok(data);
                     }
                 }
@@ -102,4 +118,18 @@ pub trait Apdu {
             }
         }
     }
+}
+
+const fn is_digit(ch: u8) -> bool {
+    ('0' as u8 <= ch) & (ch <= '9' as u8)
+}
+
+/// PIN ^[0-9]{4}$ validation
+pub(crate) fn check_pin(pin_str: &str) -> bool {
+    let pin = pin_str.as_bytes();
+    pin.len() == 4
+        && is_digit(pin[0])
+        && is_digit(pin[1])
+        && is_digit(pin[2])
+        && is_digit(pin[3])
 }
