@@ -11,13 +11,8 @@ use sha2::{
     Sha256,
 };
 use x509_parser::{error::X509Error, parse_x509_der};
-#[derive(Debug)]
-pub enum Error {
-    ParseError,
-    NumberError,
-    NoCAError,
-    VerificationError,
-}
+use crate::error::CryptoError as Error;
+
 impl From<BerError> for Error {
     fn from(_: BerError) -> Error {
         Error::ParseError

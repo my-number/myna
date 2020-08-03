@@ -1,6 +1,6 @@
 [package]
 name = "myna"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["yuki-js <20838151+yuki-js@users.noreply.github.com>"]
 edition = "2018"
 
