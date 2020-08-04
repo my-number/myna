@@ -3,8 +3,6 @@ extern crate failure;
 extern crate rsa;
 extern crate alloc;
 extern crate sha2;
-use alloc::vec;
-use alloc::vec::Vec;
 use der_parser::{ber::BerObjectContent, error::BerError, oid::Oid, parse_der};
 use rsa::{
     errors::Error as RSAError, hash::Hashes, BigUint, PaddingScheme, PublicKey, RSAPublicKey,
