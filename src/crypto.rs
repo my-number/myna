@@ -32,17 +32,6 @@ impl From<RSAError> for Error {
     }
 }
 
-pub fn encode_for_signature<H: rsa::hash::Hash>(
-    hashed: &[u8],
-    hashType: Option<&H>,
-) -> Result<Vec<u8>, RSAError> {
-    Ok(vec![0; 0])
-
-    // ASN.1のTagとかLengthの固定値をくっつけるだけ。
-    // マイナンバーカードにかませられるだけのデータを。
-    // てか、噛ませられるデータって実は任意なのでは？
-}
-
 /// It verifies signature. Hash function is SHA256. Padding scheme is PKCS 1.
 pub fn verify(
     pubkey: RSAPublicKey,
