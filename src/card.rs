@@ -1,57 +1,123 @@
-pub mod apdu;
-pub mod binary_reader;
-pub mod responder;
-/// returns constructed apdu vector.
-pub fn make_apdu(cla: u8, ins: u8, param: (u8, u8), data: &[u8], maxsize: Option<u8>) -> Vec<u8> {
-    let mut packet_size = 5;
-    let data_size = data.len();
-    if data_size == 0 {
-        packet_size += 0;
-    } else if data_size <= 0xff {
-        packet_size += 1 + data_size;
-    } else if data_size <= 0xffff {
-        packet_size += 3 + data_size;
-    } else {
-        panic!("Data size is too large");
-    }
-    let mut buf: Vec<u8> = Vec::with_capacity(packet_size);
-    buf.push(cla);
-    buf.push(ins);
-    buf.push(param.0);
-    buf.push(param.1);
+use der_parser::der::der_read_element_header;
+use crate::error::ApduError as Error;
+use crate::utils::{make_apdu, check_pin};
+type Request = Vec<u8>;
+type Response = Vec<u8>;
+type BinaryData = Vec<u8>;
+type Hash<'a> = &'a [u8];
+type FileId<'a> = &'a [u8];
 
-    if data_size == 0 {
-    } else if data_size <= 0xff {
-        buf.push(data_size as u8);
-    } else if data_size <= 0xffff {
-        buf.push(0);
-        buf.push(data_size as u8 >> 4);
-        buf.push(data_size as u8 & 0xff);
+pub trait Apdu {
+
+    /// (Required) Error type that transmit() returns when failed to read card
+    type TransErr;
+    /// (Required) Implement card communication here.
+    fn transmit(&self, data: Request) -> Result<Response, Self::TransErr>;
+
+    /// Transmit request and transform and error check the response
+    fn transmit_checked(&self, data: Request) -> Result<Response, Error<Self::TransErr>> {
+        match self.transmit(data) {
+            Ok(apdu) => {
+                let len = apdu.len();
+                let sw1 = apdu[len - 2];
+                let sw2 = apdu[len - 1];
+                if (sw1 == 0x90 || sw1 == 0x91) && sw2 == 0x00 {
+                    return Ok(apdu[0..(len - 2)].to_vec());
+                }
+                return Err(Error::Command(sw1, sw2));
+            }
+            Err(e) => Err(Error::Transmission(e)),
+        }
     }
-    buf.extend_from_slice(data);
-    if let Some(max) = maxsize {
-        buf.push(max);
+
+    fn select_df(&self, dfid: FileId) -> Result<(), Error<Self::TransErr>> {
+        match self.transmit_checked(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
+            Ok(_) => Ok(()),
+            _ => Err(Error::Execution("Failed to SELECT DF")),
+        }
     }
-    buf
+    fn select_ef(&self, efid: FileId) -> Result<(), Error<Self::TransErr>> {
+        match self.transmit_checked(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
+            Ok(_) => Ok(()),
+            _ => Err(Error::Execution("Failed to SELECT EF")),
+        }
+    }
+    fn select_jpki_ap(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_df(b"\xD3\x92\xf0\x00\x26\x01\x00\x00\x00\x01")
+    }
+    fn select_jpki_token(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_ef(b"\x00\x06")
+    }
+    fn select_jpki_cert_auth(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_ef(b"\x00\x0a")
+    }
+
+    fn select_jpki_auth_pin(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_ef(b"\x00\x18")
+    }
+    fn select_jpki_auth_key(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_ef(b"\x00\x17")
+    }
+    fn get_challenge(&self, size: u8) -> Result<Response, Error<Self::TransErr>> {
+        match self.transmit_checked(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
+            Ok(s) => Ok(s),
+            _ => Err(Error::Execution("GET CHALLENGE failed")),
+        }
+    }
+    fn verify_pin(&self, pin: &str) -> Result<(), Error<Self::TransErr>> {
+        if !check_pin(pin) {
+            return Err(Error::Execution("PIN is invalid"))
+        }
+        match self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), pin.as_bytes(), None)) {
+            Ok(_) => Ok(()),
+            _ => Err(Error::Execution("VERIFY PIN failed")),
+        }
+    }
+    fn compute_sig(&self, hash_pkcs1: Hash) -> Result<Response, Error<Self::TransErr>> {
+        match self.transmit_checked(make_apdu(
+            0x80,
+            0x2a,
+            (0x00, 0x80),
+            &hash_pkcs1[..],
+            Some(0),
+        )) {
+            // zero, the value of Le probably means 256. it overflowed.
+            Ok(sig) => Ok(sig),
+            _ => Err(Error::Execution("COMPUTE DIGITAL SIGNATURE failed")),
+        }
+    }
+
+    fn read_binary(&self) -> Result<BinaryData, Error<Self::TransErr>> {
+        let header = match self.transmit_checked(make_apdu(0x00, 0xb0, (0u8, 0u8), &[], Some(7u8))) {
+            Ok(s) => s,
+            _ => return Err(Error::Execution("READ BINARY failed")),
+        };
+
+        let parsed = der_read_element_header(&header[..]).unwrap();
+        let length = parsed.1.len as usize + header.len() - parsed.0.len();
+        
+        let mut data: Vec<u8> = Vec::with_capacity(length);
+        loop {
+            let current_size = data.len();
+            let p1 = ((current_size >> 8) & 0xff) as u8;
+            let p2 = (current_size & 0xff) as u8;
+            let remaining_size = length - current_size;
+            let read_size = if remaining_size < 0xff {
+                remaining_size as u8
+            } else {
+                0xffu8
+            };
+            match self.transmit_checked(make_apdu(0x00, 0xb0, (p1, p2), &[], Some(read_size))) {
+                Ok(s) => {
+                    data.extend_from_slice(&s[..]);
+                    if remaining_size < 0xff {
+                        return Ok(data);
+                    }
+                }
+                _ => return Err(Error::Execution("READ BINARY failed")),
+            }
+        }
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    extern crate hex_literal;
-    use hex_literal::hex;
-    #[test]
-    fn it_makes_apdu() {
-        assert_eq!(
-            make_apdu(0x00, 0x0a, (0x0b, 0x00), &[1, 2, 3, 4, 5], Some(0)),
-            hex!("000a0b0005010203040500")
-        );
-    }
-    #[test]
-    fn it_makes_apdu_without_le() {
-        assert_eq!(
-            make_apdu(0x00, 0x0a, (0x0b, 0x00), &[1, 2, 3, 4, 5], None),
-            hex!("000a0b0005010203040500")
-        );
-    }
-}
+
