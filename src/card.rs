@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use der_parser::der::der_read_element_header;
 use crate::error::ApduError as Error;
 use crate::utils::{make_apdu, check_pin};
