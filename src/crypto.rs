@@ -5,8 +5,9 @@ extern crate alloc;
 extern crate sha2;
 use der_parser::{ber::BerObjectContent, error::BerError, oid::Oid, parse_der};
 use rsa::{
-    errors::Error as RSAError, hash::Hashes, BigUint, PaddingScheme, PublicKey, RSAPublicKey,
+    errors::Error as RSAError, hash::Hashes, BigUint, PaddingScheme, PublicKey,
 };
+pub use rsa::RSAPublicKey;
 use sha2::{
     digest::{FixedOutput, Input},
     Sha256,

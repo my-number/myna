@@ -47,7 +47,6 @@ pub fn check_pin(pin_str: &str) -> bool {
         && is_digit(pin[2])
         && is_digit(pin[3])
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

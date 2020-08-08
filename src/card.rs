@@ -1,7 +1,7 @@
+use crate::error::ApduError as Error;
+use crate::utils::{check_pin, make_apdu};
 use alloc::vec::Vec;
 use der_parser::der::der_read_element_header;
-use crate::error::ApduError as Error;
-use crate::utils::{make_apdu, check_pin};
 type Request = Vec<u8>;
 type Response = Vec<u8>;
 type BinaryData = Vec<u8>;
@@ -9,7 +9,6 @@ type Hash<'a> = &'a [u8];
 type FileId<'a> = &'a [u8];
 
 pub trait Apdu {
-
     /// (Required) Error type that transmit() returns when failed to read card
     type TransErr;
     /// (Required) Implement card communication here.
@@ -20,7 +19,10 @@ pub trait Apdu {
         match self.transmit(data) {
             Ok(apdu) => {
                 let len = apdu.len();
-                let sw1 = apdu[len - 2];
+                if len < 2 {
+                    return Err(Error::Fatal("No response"));
+                }
+                let sw1 = apdu[len - 2]; // overflow
                 let sw2 = apdu[len - 1];
                 if (sw1 == 0x90 || sw1 == 0x91) && sw2 == 0x00 {
                     return Ok(apdu[0..(len - 2)].to_vec());
@@ -34,13 +36,13 @@ pub trait Apdu {
     fn select_df(&self, dfid: FileId) -> Result<(), Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
             Ok(_) => Ok(()),
-            _ => Err(Error::Execution("Failed to SELECT DF")),
+            Err(e) => Err(e.check_err("Failed to SELECT DF")),
         }
     }
     fn select_ef(&self, efid: FileId) -> Result<(), Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
             Ok(_) => Ok(()),
-            _ => Err(Error::Execution("Failed to SELECT EF")),
+            Err(e) => Err(e.check_err("Failed to SELECT EF")),
         }
     }
     fn select_jpki_ap(&self) -> Result<(), Error<Self::TransErr>> {
@@ -62,17 +64,25 @@ pub trait Apdu {
     fn get_challenge(&self, size: u8) -> Result<Response, Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
             Ok(s) => Ok(s),
-            _ => Err(Error::Execution("GET CHALLENGE failed")),
+            Err(e) => Err(e.check_err("GET CHALLENGE failed")),
         }
     }
     fn verify_pin(&self, pin: &str) -> Result<(), Error<Self::TransErr>> {
         if !check_pin(pin) {
-            return Err(Error::Execution("PIN is invalid"))
+            return Err(Error::Execution("PIN is invalid"));
         }
         match self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), pin.as_bytes(), None)) {
             Ok(_) => Ok(()),
-            _ => Err(Error::Execution("VERIFY PIN failed")),
+            Err(e) => Err(e.pin_err()),
         }
+    }
+    fn get_pin_remaining_retries(&self) -> Result<u8, Error<Self::TransErr>> {
+        if let Err(e) = self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), &[], None)){
+            if let Error::PinIncorrect(remaining) = e.pin_err() {
+                 return Ok(remaining)
+            }
+        }
+        return Err(Error::Fatal("Unexpected Error"))
     }
     fn compute_sig(&self, hash_pkcs1: Hash) -> Result<Response, Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(
@@ -84,19 +94,10 @@ pub trait Apdu {
         )) {
             // zero, the value of Le probably means 256. it overflowed.
             Ok(sig) => Ok(sig),
-            _ => Err(Error::Execution("COMPUTE DIGITAL SIGNATURE failed")),
+            Err(e) => Err(e.check_err("COMPUTE DIGITAL SIGNATURE failed")),
         }
     }
-
-    fn read_binary(&self) -> Result<BinaryData, Error<Self::TransErr>> {
-        let header = match self.transmit_checked(make_apdu(0x00, 0xb0, (0u8, 0u8), &[], Some(7u8))) {
-            Ok(s) => s,
-            _ => return Err(Error::Execution("READ BINARY failed")),
-        };
-
-        let parsed = der_read_element_header(&header[..]).unwrap();
-        let length = parsed.1.len as usize + header.len() - parsed.0.len();
-        
+    fn read_binary(&self, length: usize) -> Result<BinaryData, Error<Self::TransErr>> {
         let mut data: Vec<u8> = Vec::with_capacity(length);
         loop {
             let current_size = data.len();
@@ -115,10 +116,23 @@ pub trait Apdu {
                         return Ok(data);
                     }
                 }
-                _ => return Err(Error::Execution("READ BINARY failed")),
+                Err(e) => return Err(e.check_err("READ BINARY failed")),
             }
         }
     }
+    fn read_cert(&self) -> Result<BinaryData, Error<Self::TransErr>> {
+        let header = self.read_binary(8)?;
+
+        let parsed = der_read_element_header(&header[..])
+            .map_err(|_| Error::Execution("Failed to parse Certificate header"))?;
+        let length = parsed.1.len as usize + header.len() - parsed.0.len();
+
+        return self.read_binary(length);
+    }
+    fn is_mynumber_card(&self) -> Result<bool, Error<Self::TransErr>> {
+        self.select_jpki_ap()?;
+        self.select_jpki_token()?;
+        let jpki_token = self.read_binary(32)?;
+        Ok(&jpki_token[..] == b"JPKIAPICCTOKEN2                 ")
+    }
 }
-
-
