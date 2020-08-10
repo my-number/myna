@@ -1,12 +1,19 @@
 use crate::error::ApduError as Error;
-use crate::utils::{check_pin, make_apdu};
+use crate::utils::{check_password, check_pin, make_apdu};
 use alloc::vec::Vec;
 use der_parser::der::der_read_element_header;
+
 type Request = Vec<u8>;
 type Response = Vec<u8>;
 type BinaryData = Vec<u8>;
 type Hash<'a> = &'a [u8];
 type FileId<'a> = &'a [u8];
+
+#[derive(Clone, Copy, Debug)]
+pub enum KeyType {
+    UserAuth,
+    DigitalSign,
+}
 
 pub trait Apdu {
     /// (Required) Error type that transmit() returns when failed to read card
@@ -32,59 +39,70 @@ pub trait Apdu {
             Err(e) => Err(Error::Transmission(e)),
         }
     }
-
+    /// SELECT DF
     fn select_df(&self, dfid: FileId) -> Result<(), Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0xa4, (0x04, 0x0c), dfid, None)) {
             Ok(_) => Ok(()),
             Err(e) => Err(e.check_err("Failed to SELECT DF")),
         }
     }
+    /// SELECT EF
+    /// 
+    /// Call it with DF selected
     fn select_ef(&self, efid: FileId) -> Result<(), Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0xa4, (0x02, 0x0c), efid, None)) {
             Ok(_) => Ok(()),
             Err(e) => Err(e.check_err("Failed to SELECT EF")),
         }
     }
-    fn select_jpki_ap(&self) -> Result<(), Error<Self::TransErr>> {
-        self.select_df(b"\xD3\x92\xf0\x00\x26\x01\x00\x00\x00\x01")
-    }
-    fn select_jpki_token(&self) -> Result<(), Error<Self::TransErr>> {
-        self.select_ef(b"\x00\x06")
-    }
-    fn select_jpki_cert_auth(&self) -> Result<(), Error<Self::TransErr>> {
-        self.select_ef(b"\x00\x0a")
-    }
 
-    fn select_jpki_auth_pin(&self) -> Result<(), Error<Self::TransErr>> {
-        self.select_ef(b"\x00\x18")
-    }
-    fn select_jpki_auth_key(&self) -> Result<(), Error<Self::TransErr>> {
-        self.select_ef(b"\x00\x17")
-    }
+    /// GET CHALLENGE
     fn get_challenge(&self, size: u8) -> Result<Response, Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(0x00, 0x84, (0, 0), &[], Some(size))) {
             Ok(s) => Ok(s),
             Err(e) => Err(e.check_err("GET CHALLENGE failed")),
         }
     }
-    fn verify_pin(&self, pin: &str) -> Result<(), Error<Self::TransErr>> {
-        if !check_pin(pin) {
-            return Err(Error::Execution("PIN is invalid"));
-        }
+
+    /// VERIFY PIN
+    /// 
+    /// Call it with PIN EF selected
+    fn verify_pin(&self, pin: &str, key_type: KeyType) -> Result<(), Error<Self::TransErr>> {
+        match key_type {
+            KeyType::UserAuth => {
+                if !check_pin(pin) {
+                    return Err(Error::Execution("PIN is invalid"));
+                }
+            }
+            KeyType::DigitalSign => {
+                if !check_password(pin) {
+                    return Err(Error::Execution("PIN is invalid"));
+                }
+            }
+        };
+
         match self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), pin.as_bytes(), None)) {
             Ok(_) => Ok(()),
             Err(e) => Err(e.pin_err()),
         }
     }
-    fn get_pin_remaining_retries(&self) -> Result<u8, Error<Self::TransErr>> {
-        if let Err(e) = self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), &[], None)){
+
+    /// VERIFY PIN without PIN
+    ///
+    /// check PIN retry counter
+    fn lookup_pin(&self) -> Result<u8, Error<Self::TransErr>> {
+        if let Err(e) = self.transmit_checked(make_apdu(0x00, 0x20, (0x00, 0x80), &[], None)) {
             if let Error::PinIncorrect(remaining) = e.pin_err() {
-                 return Ok(remaining)
+                return Ok(remaining);
             }
         }
-        return Err(Error::Fatal("Unexpected Error"))
+        return Err(Error::Fatal("Unexpected Error"));
     }
-    fn compute_sig(&self, hash_pkcs1: Hash) -> Result<Response, Error<Self::TransErr>> {
+
+    /// COMPUTE DIGITAL SIGNATURE
+    ///
+    /// Call it with Private Key EF selected
+    fn compute_digital_signature(&self, hash_pkcs1: Hash) -> Result<Response, Error<Self::TransErr>> {
         match self.transmit_checked(make_apdu(
             0x80,
             0x2a,
@@ -97,6 +115,9 @@ pub trait Apdu {
             Err(e) => Err(e.check_err("COMPUTE DIGITAL SIGNATURE failed")),
         }
     }
+    /// READ BINARY
+    ///
+    /// Call it with readable object selected
     fn read_binary(&self, length: usize) -> Result<BinaryData, Error<Self::TransErr>> {
         let mut data: Vec<u8> = Vec::with_capacity(length);
         loop {
@@ -120,6 +141,8 @@ pub trait Apdu {
             }
         }
     }
+    
+    /// Read binary as X.509 Certificate
     fn read_cert(&self) -> Result<BinaryData, Error<Self::TransErr>> {
         let header = self.read_binary(8)?;
 
@@ -129,10 +152,74 @@ pub trait Apdu {
 
         return self.read_binary(length);
     }
+
+    /// Selects JPKI AP DF
+    fn select_jpki_ap(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_df(b"\xD3\x92\xf0\x00\x26\x01\x00\x00\x00\x01")
+    }
+    
+    /// Selects JPKI Token EF
+    fn select_jpki_token(&self) -> Result<(), Error<Self::TransErr>> {
+        self.select_ef(b"\x00\x06")
+    }
+
+    /// Selects JPKI Certificate EF
+    fn select_jpki_cert(&self, key_type: KeyType) -> Result<(), Error<Self::TransErr>> {
+        match key_type {
+            KeyType::UserAuth => self.select_ef(b"\x00\x0a"),
+            KeyType::DigitalSign => self.select_ef(b"\x00\x01"),
+        }
+    }
+
+    /// Selects JPKI PIN EF
+    fn select_jpki_pin(&self, key_type: KeyType) -> Result<(), Error<Self::TransErr>> {
+        match key_type {
+            KeyType::UserAuth => self.select_ef(b"\x00\x18"),
+            KeyType::DigitalSign => self.select_ef(b"\x00\x1B"),
+        }
+    }
+
+    /// Selects JPKI Private Key EF
+    fn select_jpki_key(&self, key_type: KeyType) -> Result<(), Error<Self::TransErr>> {
+        match key_type {
+            KeyType::UserAuth => self.select_ef(b"\x00\x17"),
+            _ => unimplemented!(),
+        }
+    }
+
+    /// Checks if it is mynumber card
     fn is_mynumber_card(&self) -> Result<bool, Error<Self::TransErr>> {
         self.select_jpki_ap()?;
         self.select_jpki_token()?;
         let jpki_token = self.read_binary(32)?;
         Ok(&jpki_token[..] == b"JPKIAPICCTOKEN2                 ")
+    }
+
+    /// Gets Certificate
+    fn get_cert(&self, key_type: KeyType) -> Result<BinaryData, Error<Self::TransErr>> {
+        self.select_jpki_ap()?;
+        self.select_jpki_key(key_type)?;
+        self.select_jpki_cert(key_type)?;
+
+        let cert = self.read_cert()?;
+        Ok(cert)
+    }
+
+    /// Computes signature
+    fn compute_sig(&self, pin: &str, hash: Hash, key_type: KeyType) -> Result<Response, Error<Self::TransErr>> {
+        self.select_jpki_ap()?;
+        self.select_jpki_pin(key_type)?;
+        self.verify_pin(pin, key_type)?;
+        self.select_jpki_key(key_type)?;
+        let sig = self.compute_digital_signature(hash)?;
+        Ok(sig)
+    }
+
+    /// Gets PIN retry counter
+    fn get_retry_counter(&self, key_type: KeyType) -> Result<u8, Error<Self::TransErr>> {
+        self.select_jpki_ap()?;
+        self.select_jpki_pin(key_type)?;
+        let count = self.lookup_pin()?;
+        Ok(count)
     }
 }

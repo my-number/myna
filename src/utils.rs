@@ -41,11 +41,10 @@ const fn is_digit(ch: u8) -> bool {
 /// PIN ^[0-9]{4}$ validation
 pub fn check_pin(pin_str: &str) -> bool {
     let pin = pin_str.as_bytes();
-    pin.len() == 4
-        && is_digit(pin[0])
-        && is_digit(pin[1])
-        && is_digit(pin[2])
-        && is_digit(pin[3])
+    pin.len() == 4 && is_digit(pin[0]) && is_digit(pin[1]) && is_digit(pin[2]) && is_digit(pin[3])
+}
+pub fn check_password(password: &str) -> bool {
+    unimplemented!()
 }
 #[cfg(test)]
 mod tests {
@@ -68,30 +67,18 @@ mod tests {
     }
     #[test]
     fn it_checks_valid_pin() {
-        assert_eq!(
-            check_pin("1919"),
-            true
-        );
+        assert_eq!(check_pin("1919"), true);
     }
     #[test]
     fn it_checks_non_digit_pin() {
-        assert_eq!(
-            check_pin("pien"),
-            false
-        );
+        assert_eq!(check_pin("pien"), false);
     }
     #[test]
     fn it_checks_digit_non_digit_pin() {
-        assert_eq!(
-            check_pin("pa0n"),
-            false
-        );
+        assert_eq!(check_pin("pa0n"), false);
     }
     #[test]
     fn it_checks_too_long_pin() {
-        assert_eq!(
-            check_pin("114514"),
-            false
-        );
+        assert_eq!(check_pin("114514"), false);
     }
 }
