@@ -1,10 +1,10 @@
 [package]
 name = "myna"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["yuki-js <20838151+yuki-js@users.noreply.github.com>"]
 edition = "2018"
 license = "Apache-2.0"
-description = "Japan ID card(mynumber card) manipulation library"
+description = "Japanese ID card(mynumber card) manipulation library"
 repository = "https://github.com/my-number/myna"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
